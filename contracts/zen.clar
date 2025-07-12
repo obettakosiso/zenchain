@@ -164,3 +164,72 @@
         (ok distribution-value))
     )
 )
+
+;; Administrative functions
+(define-public (set-minimum-contribution (new-minimum-value uint))
+    (begin
+        (asserts! (verify-coordinator-privileges) ERR-UNAUTHORIZED-COORDINATOR-ACCESS)
+        (asserts! (validate-contribution-amount new-minimum-value) ERR-CONTRIBUTION-AMOUNT-INVALID)
+        (var-set contribution-minimum-amount new-minimum-value)
+        (ok true)
+    )
+)
+
+(define-public (toggle-initiative-status)
+    (begin
+        (asserts! (verify-coordinator-privileges) ERR-UNAUTHORIZED-COORDINATOR-ACCESS)
+        (var-set initiative-active-status (not (var-get initiative-active-status)))
+        (ok true)
+    )
+)
+
+(define-public (enable-emergency-mode)
+    (begin
+        (asserts! (verify-coordinator-privileges) ERR-UNAUTHORIZED-COORDINATOR-ACCESS)
+        (var-set initiative-emergency-mode true)
+        (ok true)
+    )
+)
+
+(define-public (disable-emergency-mode)
+    (begin
+        (asserts! (verify-coordinator-privileges) ERR-UNAUTHORIZED-COORDINATOR-ACCESS)
+        (var-set initiative-emergency-mode false)
+        (ok true)
+    )
+)
+
+(define-public (update-participant-status (participant-wallet principal) (new-status (string-ascii 20)))
+    (begin
+        (asserts! (verify-coordinator-privileges) ERR-UNAUTHORIZED-COORDINATOR-ACCESS)
+        (asserts! (validate-participant-status new-status) ERR-PARTICIPANT-STATUS-INVALID)
+        (asserts! 
+            (is-some (map-get? participant-registry participant-wallet)) 
+            ERR-PARTICIPANT-NONEXISTENT
+        )
+        
+        (let (
+            (current-record (unwrap! (map-get? participant-registry participant-wallet) ERR-PARTICIPANT-NONEXISTENT))
+        )
+        (map-set participant-registry
+            participant-wallet
+            {
+                is-participant-active: (get is-participant-active current-record),
+                wellness-funds-received: (get wellness-funds-received current-record),
+                last-distribution-block: (get last-distribution-block current-record),
+                current-program-status: new-status
+            }
+        )
+        (ok true))
+    )
+)
+
+;; Transfer ownership
+(define-public (transfer-coordinator-rights (new-coordinator-address principal))
+    (begin
+        (asserts! (verify-coordinator-privileges) ERR-UNAUTHORIZED-COORDINATOR-ACCESS)
+        (asserts! (validate-coordinator-address new-coordinator-address) ERR-COORDINATOR-ADDRESS-INVALID)
+        (var-set initiative-coordinator new-coordinator-address)
+        (ok true)
+    )
+)
