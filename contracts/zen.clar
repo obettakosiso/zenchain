@@ -37,3 +37,130 @@
         last-contribution-block: uint
     }
 )
+
+;; Read-only functions
+(define-read-only (get-initiative-coordinator)
+    (var-get initiative-coordinator)
+)
+
+(define-read-only (get-initiative-balance)
+    (var-get initiative-balance-total)
+)
+
+(define-read-only (get-participant-information (participant-wallet principal))
+    (map-get? participant-registry participant-wallet)
+)
+
+(define-read-only (get-contributor-information (contributor-wallet principal))
+    (map-get? contributor-registry contributor-wallet)
+)
+
+(define-read-only (check-initiative-operational-status)
+    (and (var-get initiative-active-status) (not (var-get initiative-emergency-mode)))
+)
+
+;; Private functions
+(define-private (verify-coordinator-privileges)
+    (is-eq tx-sender (var-get initiative-coordinator))
+)
+
+(define-private (update-contributor-history (contributor-wallet principal) (contribution-value uint))
+    (let (
+        (existing-contributor-record (default-to 
+            { total-contributions-made: u0, last-contribution-block: u0 } 
+            (map-get? contributor-registry contributor-wallet)
+        ))
+    )
+    (map-set contributor-registry
+        contributor-wallet
+        {
+            total-contributions-made: (+ (get total-contributions-made existing-contributor-record) contribution-value),
+            last-contribution-block: block-height
+        }
+    ))
+)
+
+;; Private validation functions
+(define-private (validate-contribution-amount (amount uint))
+    (and 
+        (> amount u0)
+        (<= amount u1000000000000) ;; Set reasonable upper limit
+    )
+)
+
+(define-private (validate-participant-status (status-code (string-ascii 20)))
+    (or 
+        (is-eq status-code "active")
+        (is-eq status-code "pending")
+        (is-eq status-code "suspended")
+        (is-eq status-code "completed")
+    )
+)
+
+(define-private (validate-coordinator-address (wallet-address principal))
+    (and 
+        (not (is-eq wallet-address (var-get initiative-coordinator)))
+        (not (is-eq wallet-address (as-contract tx-sender)))
+    )
+)
+
+;; Public functions
+(define-public (make-contribution)
+    (let (
+        (contribution-value (stx-get-balance tx-sender))
+    )
+    (asserts! (>= contribution-value (var-get contribution-minimum-amount)) ERR-CONTRIBUTION-MINIMUM-NOT-MET)
+    (asserts! (check-initiative-operational-status) ERR-INITIATIVE-NOT-ACTIVE)
+    
+    (try! (stx-transfer? contribution-value tx-sender (as-contract tx-sender)))
+    (var-set initiative-balance-total (+ (var-get initiative-balance-total) contribution-value))
+    (update-contributor-history tx-sender contribution-value)
+    (ok contribution-value))
+)
+
+(define-public (register-new-participant (participant-wallet principal))
+    (begin
+        (asserts! (verify-coordinator-privileges) ERR-UNAUTHORIZED-COORDINATOR-ACCESS)
+        (asserts! (is-none (map-get? participant-registry participant-wallet)) ERR-PARTICIPANT-DUPLICATE)
+        
+        (map-set participant-registry 
+            participant-wallet
+            {
+                is-participant-active: true,
+                wellness-funds-received: u0,
+                last-distribution-block: u0,
+                current-program-status: "active"
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-public (distribute-wellness-funds (participant-wallet principal) (distribution-value uint))
+    (begin
+        (asserts! (verify-coordinator-privileges) ERR-UNAUTHORIZED-COORDINATOR-ACCESS)
+        (asserts! (check-initiative-operational-status) ERR-INITIATIVE-NOT-ACTIVE)
+        (asserts! (>= (var-get initiative-balance-total) distribution-value) ERR-INITIATIVE-BALANCE-INSUFFICIENT)
+        (asserts! 
+            (is-some (map-get? participant-registry participant-wallet)) 
+            ERR-PARTICIPANT-NONEXISTENT
+        )
+        
+        (try! (as-contract (stx-transfer? distribution-value tx-sender participant-wallet)))
+        (var-set initiative-balance-total (- (var-get initiative-balance-total) distribution-value))
+        
+        (let (
+            (participant-record (unwrap! (map-get? participant-registry participant-wallet) ERR-PARTICIPANT-NONEXISTENT))
+        )
+        (map-set participant-registry
+            participant-wallet
+            {
+                is-participant-active: (get is-participant-active participant-record),
+                wellness-funds-received: (+ (get wellness-funds-received participant-record) distribution-value),
+                last-distribution-block: block-height,
+                current-program-status: (get current-program-status participant-record)
+            }
+        )
+        (ok distribution-value))
+    )
+)
